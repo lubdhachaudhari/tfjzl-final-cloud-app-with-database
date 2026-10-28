@@ -1,11 +1,11 @@
-<<<<<<< HEAD
+
 # IBM Full Stack Software Developer: Django Online Course & Mock Examination System
 
 A comprehensive, fully functional Django web application developed for the IBM Full Stack Software Developer / Back-End Developer curriculum on Coursera (*Django Application Development with SQL and Databases*).
 
 This project implements an online course learning platform with an interactive mock examination engine, score calculation algorithms, user authentication, and advanced Django Administration with inline configurations.
 
----
+
 
 ## Table of Contents
 1. [Key Features](#key-features)
@@ -18,8 +18,6 @@ This project implements an online course learning platform with an interactive m
 8. [Django Admin Portal & Screenshot Verification](#django-admin-portal--screenshot-verification)
 9. [Examination Engine & Result Verification](#examination-engine--result-verification)
 10. [GitHub Deployment & Workflow](#github-deployment--workflow)
-
----
 
 ## 1. Key Features
 
@@ -40,7 +38,7 @@ This project implements an online course learning platform with an interactive m
   - `QuestionAdmin` with nested `ChoiceInline` (`admin.TabularInline`).
   - Full model registration across both Authentication & Authorization and OnlineCourse modules.
 
----
+
 
 ## 2. Project Architecture & Directory Structure
 
@@ -84,7 +82,7 @@ coursera-django-final/
     └── take_screenshots.py      # Automated headless screenshot verification runner
 ```
 
----
+
 
 ## 3. Technology Stack
 
@@ -93,9 +91,6 @@ coursera-django-final/
 - **Database:** SQLite3 (standard for local development)
 - **Frontend:** HTML5, CSS3, Bootstrap 5.3, Bootstrap Icons
 - **Version Control:** Git & GitHub
-
----
-
 ## 4. Installation & Setup
 
 ### Prerequisites
@@ -124,7 +119,7 @@ source venv/bin/activate
 pip install django pillow
 ```
 
----
+
 
 ## 5. Database Migrations & Development Sample Data
 
@@ -148,7 +143,7 @@ python manage.py setup_sample_data
 
 *(Note: Running this command multiple times will not create duplicate records).*
 
----
+
 
 ## 6. Running the Application
 
@@ -162,7 +157,7 @@ Open your browser and navigate to:
 - **Course Details & Examination:** [http://127.0.0.1:8000/onlinecourse/course/1/](http://127.0.0.1:8000/onlinecourse/course/1/)
 - **Django Administration:** [http://127.0.0.1:8000/admin/](http://127.0.0.1:8000/admin/)
 
----
+
 
 ## 7. Running Tests
 
@@ -181,7 +176,7 @@ Run all tests:
 python manage.py test onlinecourse
 ```
 
----
+
 
 ## 8. Django Admin Portal & Screenshot Verification
 
@@ -192,7 +187,6 @@ The administration site organizes models into:
 ![Admin Portal](03-admin-site.jpeg)
 *Figure 1: Genuine screenshot of the running Django administration site (`03-admin-site.jpeg`).*
 
----
 
 ## 9. Examination Engine & Result Verification
 
@@ -201,7 +195,7 @@ Upon submitting the course exam with correct answers, the application calculates
 ![Exam Result](07-final.jpeg)
 *Figure 2: Genuine screenshot of the real exam result page displaying Congratulations and performance report (`07-final.jpeg`).*
 
----
+
 
 ## 10. GitHub Deployment & Workflow
 
@@ -223,11 +217,11 @@ git remote add origin https://github.com/<your-username>/<your-repo-name>.git
 git push -u origin main
 ```
 
----
+
 
 ## License
 Educational project developed under the IBM Full Stack Software Developer program.
-=======
+
 # IBM Django Online Course
 
 A Django web application for managing online courses, lessons, and mock examinations.
@@ -272,4 +266,4 @@ A Django web application for managing online courses, lessons, and mock examinat
 ## Project Status
 
 Development in progress.
->>>>>>> 7bd6869700051951a0d502cef7c79051d8577624
+
