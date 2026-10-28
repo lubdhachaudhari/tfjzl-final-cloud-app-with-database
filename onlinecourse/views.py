@@ -1,60 +1,117 @@
 from django.contrib import messages
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
 from django.http import HttpResponseForbidden, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.utils.decorators import method_decorator
-from django.views import generic
+from django.views import View
 
-from .models import Choice, Course, Enrollment, Lesson, Question, Submission
-
-
-class CourseListView(generic.ListView):
-    template_name = 'onlinecourse/course_list_bootstrap.html'
-    context_object_name = 'course_list'
-
-    def get_queryset(self):
-        courses = Course.objects.order_by('-total_enrollment')[:10]
-        return courses
+from .models import Course, Lesson, Enrollment, Question, Choice, Submission
 
 
-class CourseDetailsView(generic.DetailView):
-    model = Course
+def index(request):
+    courses = Course.objects.all().order_by('id')
+
+    return render(
+        request,
+        'onlinecourse/course_list_bootstrap.html',
+        {
+            'course_list': courses,
+            'courses': courses,
+        }
+    )
+
+
+def registration_request(request):
+    if request.method == 'POST':
+        username = request.POST.get('username', '').strip()
+        password = request.POST.get('password', '')
+
+        if not username or not password:
+            messages.error(request, 'Username and password are required.')
+            return render(request, 'onlinecourse/registration.html')
+
+        if User.objects.filter(username=username).exists():
+            messages.error(request, 'Username already exists.')
+            return render(request, 'onlinecourse/registration.html')
+
+        user = User.objects.create_user(
+            username=username,
+            first_name=request.POST.get('first_name', ''),
+            last_name=request.POST.get('last_name', ''),
+            password=password,
+        )
+        login(request, user)
+        messages.success(request, f'Account created for {username}!')
+        return redirect('onlinecourse:index')
+
+    return render(request, 'onlinecourse/registration.html')
+
+
+def course_details(request, course_id):
+    course = get_object_or_404(Course, pk=course_id)
+    lessons = course.lessons.all().prefetch_related('questions__choices')
+
+    is_enrolled = False
+
+    if request.user.is_authenticated:
+        is_enrolled = Enrollment.objects.filter(
+            user=request.user,
+            course=course
+        ).exists()
+
+    return render(
+        request,
+        'onlinecourse/course_details_bootstrap.html',
+        {
+            'course': course,
+            'lessons': lessons,
+            'is_enrolled': is_enrolled,
+        }
+    )
+
+
+class CourseDetailsView(View):
     template_name = 'onlinecourse/course_details_bootstrap.html'
-    context_object_name = 'course'
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        course = self.get_object()
+    def get(self, request, course_id):
+        course = get_object_or_404(Course, pk=course_id)
         lessons = course.lessons.all().prefetch_related('questions__choices')
-        context['lessons'] = lessons
-        
-        # Check if current user is enrolled
+
         is_enrolled = False
-        if self.request.user.is_authenticated:
+
+        if request.user.is_authenticated:
             is_enrolled = Enrollment.objects.filter(
-                user=self.request.user,
+                user=request.user,
                 course=course
             ).exists()
-        context['is_enrolled'] = is_enrolled
-        return context
+
+        return render(
+            request,
+            self.template_name,
+            {
+                'course': course,
+                'lessons': lessons,
+                'is_enrolled': is_enrolled,
+            }
+        )
 
 
 @login_required
 def enroll(request, course_id):
     course = get_object_or_404(Course, pk=course_id)
-    enrollment, created = Enrollment.objects.get_or_create(
+
+    Enrollment.objects.get_or_create(
         user=request.user,
         course=course,
-        defaults={'mode': 'audit'}
+        defaults={'mode': Enrollment.AUDIT}
     )
-    if created:
-        course.total_enrollment += 1
-        course.save()
-        messages.success(request, f"You have enrolled in {course.name} successfully.")
-    return redirect('onlinecourse:course_details', pk=course.id)
+
+    return redirect(
+        'onlinecourse:course_details',
+        course_id=course.id
+    )
 
 
 @login_required
@@ -63,180 +120,278 @@ def submit(request, course_id):
         return HttpResponseNotAllowed(['POST'])
 
     course = get_object_or_404(Course, pk=course_id)
+
     enrollment, _ = Enrollment.objects.get_or_create(
         user=request.user,
         course=course,
-        defaults={'mode': 'audit'}
+        defaults={'mode': Enrollment.AUDIT}
     )
 
-    questions = Question.objects.filter(lesson__course=course)
-    if not questions.exists():
-        questions = Question.objects.filter(courses=course)
+    # Get questions associated with this course through its lessons
+    lesson_questions = Question.objects.filter(
+        lesson__course=course
+    )
 
-    valid_choices = Choice.objects.filter(question__in=questions)
-    valid_choice_map = {c.id: c for c in valid_choices}
+    # Also include questions directly associated with the course
+    course_questions = Question.objects.filter(
+        courses=course
+    )
 
-    # Extract submitted choices from request.POST
-    selected_choice_ids = set()
+    questions = (
+        lesson_questions | course_questions
+    ).distinct().order_by('order', 'id')
 
-    for key, val in request.POST.items():
-        if key.startswith('choice_') and val and str(val).isdigit():
-            selected_choice_ids.add(int(val))
+    question_ids = set(questions.values_list('id', flat=True))
 
-    for key in ['choice', 'choices', 'selected_choice', 'selected_choices']:
-        for val in request.POST.getlist(key):
-            if str(val).isdigit():
-                selected_choice_ids.add(int(val))
+    valid_choices = Choice.objects.filter(
+        question_id__in=question_ids
+    ).select_related('question')
 
-    for key, val in request.POST.items():
-        if key.isdigit() and val in ('on', '1', 'true', 'True'):
-            selected_choice_ids.add(int(key))
+    valid_choice_map = {
+        choice.id: choice
+        for choice in valid_choices
+    }
 
-    user_selected_choices = [
-        valid_choice_map[cid] for cid in selected_choice_ids if cid in valid_choice_map
+    selected_ids = set()
+
+    # Handle radio buttons or checkboxes named choice_<question_id>
+    for key, values in request.POST.lists():
+        if key.startswith('choice_'):
+            for value in values:
+                if str(value).isdigit():
+                    selected_ids.add(int(value))
+
+    # Handle other common form field names
+    for key in (
+        'choice',
+        'choices',
+        'selected_choice',
+        'selected_choices'
+    ):
+        for value in request.POST.getlist(key):
+            if str(value).isdigit():
+                selected_ids.add(int(value))
+
+    # Handle checkbox fields whose names are choice IDs
+    for key, values in request.POST.lists():
+        if key.isdigit():
+            if any(
+                value in ('on', '1', 'true', 'True')
+                for value in values
+            ):
+                selected_ids.add(int(key))
+
+    # Ignore choices that do not belong to questions in this course
+    selected_choices = [
+        valid_choice_map[choice_id]
+        for choice_id in selected_ids
+        if choice_id in valid_choice_map
     ]
+
+    choices_by_question = {}
+
+    for choice in selected_choices:
+        choices_by_question.setdefault(
+            choice.question_id, []
+        ).append(choice)
 
     last_submission = None
 
-    for q in questions:
-        q_choices = [c for c in user_selected_choices if c.question_id == q.id]
-        if q_choices:
-            chosen = q_choices[0]
-            submission, _ = Submission.objects.update_or_create(
-                user=request.user,
-                question=q,
-                defaults={
-                    'choice': chosen,
-                    'enrollment': enrollment,
-                }
-            )
-            submission.choices.set([chosen])
-            last_submission = submission
-        else:
-            Submission.objects.filter(user=request.user, question=q).delete()
+    # Save one submission per question, including unanswered questions
+    for question in questions:
+        question_choices = choices_by_question.get(
+            question.id, []
+        )
+
+        submission, _ = Submission.objects.update_or_create(
+            user=request.user,
+            question=question,
+            defaults={
+                'enrollment': enrollment,
+                'choice': (
+                    question_choices[0]
+                    if question_choices
+                    else None
+                ),
+            }
+        )
+
+        submission.choices.set(question_choices)
+        last_submission = submission
 
     if last_submission:
-        return redirect('onlinecourse:show_exam_result', course_id=course.id, submission_id=last_submission.id)
-    return redirect('onlinecourse:show_exam_result_course', course_id=course.id)
+        return redirect(
+            'onlinecourse:show_exam_result',
+            course_id=course.id,
+            submission_id=last_submission.id
+        )
+
+    return redirect(
+        'onlinecourse:show_exam_result_course',
+        course_id=course.id
+    )
 
 
 @login_required
 def show_exam_result(request, course_id, submission_id=None):
     course = get_object_or_404(Course, pk=course_id)
-    questions = Question.objects.filter(lesson__course=course)
-    if not questions.exists():
-        questions = Question.objects.filter(courses=course)
 
+    lesson_questions = Question.objects.filter(
+        lesson__course=course
+    )
+
+    course_questions = Question.objects.filter(
+        courses=course
+    )
+
+    questions = (
+        lesson_questions | course_questions
+    ).distinct().order_by('order', 'id')
+
+    # Ensure the requested submission belongs to the current user
     if submission_id is not None:
-        target_sub = get_object_or_404(Submission, pk=submission_id)
-        if target_sub.user != request.user and not request.user.is_staff:
-            return HttpResponseForbidden("You are not authorized to view another user's private exam results.")
+        target_submission = get_object_or_404(
+            Submission,
+            pk=submission_id
+        )
 
-    user_submissions = Submission.objects.filter(user=request.user, question__in=questions)
-    sub_map = {sub.question_id: sub for sub in user_submissions}
+        if (
+            target_submission.user_id != request.user.id
+            and not request.user.is_staff
+        ):
+            return HttpResponseForbidden(
+                'You are not allowed to view this result.'
+            )
 
-    total_questions = questions.count()
-    correct_count = 0
-    incorrect_count = 0
-    unanswered_count = 0
-    total_score = 0
-    earned_score = 0
+        # Prevent a submission from being used with the wrong course
+        if target_submission.enrollment_id:
+            if target_submission.enrollment.course_id != course.id:
+                return HttpResponseForbidden(
+                    'This result does not belong to this course.'
+                )
+
+        elif target_submission.question_id:
+            question_belongs_to_course = (
+                target_submission.question.lesson.course_id == course.id
+                or target_submission.question.courses.filter(
+                    pk=course.id
+                ).exists()
+            )
+
+            if not question_belongs_to_course:
+                return HttpResponseForbidden(
+                    'This result does not belong to this course.'
+                )
+
+    user_submissions = Submission.objects.filter(
+        user=request.user,
+        question__in=questions
+    ).select_related(
+        'question',
+        'choice'
+    ).prefetch_related(
+        'choices'
+    )
+
+    submission_map = {
+        submission.question_id: submission
+        for submission in user_submissions
+    }
+
     results = []
+    total_score = 0
+    total_marks = 0
+    correct_count = 0
 
-    for q in questions:
-        grade = q.grade if q.grade else 1
-        total_score += grade
-        sub = sub_map.get(q.id)
-        selected_choice = sub.choice if sub else None
+    for question in questions:
+        submission = submission_map.get(question.id)
 
-        is_correct = False
-        if selected_choice:
-            is_correct = selected_choice.is_correct
-            if is_correct:
-                correct_count += 1
-                earned_score += grade
-            else:
-                incorrect_count += 1
-        else:
-            unanswered_count += 1
+        selected_choices = []
+
+        if submission:
+            selected_choices = list(
+                submission.choices.all()
+            )
+
+            # Support submissions stored using only the single-choice FK
+            if not selected_choices and submission.choice_id:
+                selected_choices = [submission.choice]
+
+        selected_ids = [
+            choice.id for choice in selected_choices
+        ]
+
+        is_correct = question.is_get_score(selected_ids)
+        marks = question.grade or 0
+        score = marks if is_correct else 0
+
+        total_marks += marks
+        total_score += score
+
+        if is_correct:
+            correct_count += 1
 
         results.append({
-            'question': q,
-            'selected_choice': selected_choice,
+            'question': question,
+            'answered': bool(selected_choices),
+            'selected_choice': (
+                selected_choices[0]
+                if selected_choices
+                else None
+            ),
+            'selected_choices': selected_choices,
+            'choices': question.choices.all(),
             'is_correct': is_correct,
-            'choices': q.choices.all(),
-            'grade': grade,
-            'answered': selected_choice is not None
+            'grade': marks,
+            'score': score,
         })
 
-    passing_threshold = 70.0
-    percentage = (earned_score / total_score * 100.0) if total_score > 0 else 0.0
-    passed = percentage >= passing_threshold
+    percentage = (
+        (total_score / total_marks) * 100
+        if total_marks
+        else 0
+    )
 
-    if passed:
-        message = f"Congratulations, {request.user.first_name or request.user.username}! You passed the exam with a score of {earned_score}/{total_score} ({percentage:.1f}%)."
-    else:
-        message = f"Unfortunately, you did not pass the exam. Your score is {earned_score}/{total_score} ({percentage:.1f}%). The passing threshold is {passing_threshold:.0f}%."
+    passed = percentage >= 70
+    unanswered_count = sum(
+        not result['selected_choices']
+        for result in results
+    )
+    incorrect_count = len(results) - correct_count - unanswered_count
 
     context = {
         'course': course,
-        'questions': questions,
         'results': results,
-        'total_questions': total_questions,
-        'correct_count': correct_count,
-        'incorrect_count': incorrect_count,
+        'total_questions': len(results),
         'unanswered_count': unanswered_count,
-        'total_score': total_score,
-        'earned_score': earned_score,
-        'score': earned_score,
-        'grade': earned_score,
-        'percentage': round(percentage, 1),
-        'passing_threshold': passing_threshold,
+        'incorrect_count': incorrect_count,
+        'earned_score': total_score,
+        'total_score': total_marks,
+        'total_marks': total_marks,
+        'score': total_score,
+        'percentage': percentage,
         'passed': passed,
-        'message': message,
+        'is_passed': passed,
+        'correct_count': correct_count,
+        'passing_threshold': 70,
+        'message': (
+            'You passed the exam.'
+            if passed
+            else 'Exam Attempt Failed. Please review the questions and try again.'
+        ),
         'submission_id': submission_id,
-        'user_submissions': user_submissions,
     }
-    return render(request, 'onlinecourse/show_exam_result_bootstrap.html', context)
+
+    return render(
+        request,
+        'onlinecourse/show_exam_result_bootstrap.html',
+        context
+    )
 
 
-def login_request(request):
-    if request.method == 'POST':
-        username = request.POST.get('username')
-        password = request.POST.get('password')
-        user = authenticate(username=username, password=password)
-        if user is not None:
-            login(request, user)
-            messages.info(request, f"You are now logged in as {username}.")
-            next_url = request.POST.get('next') or request.GET.get('next') or reverse('onlinecourse:index')
-            return redirect(next_url)
-        else:
-            messages.error(request, "Invalid username or password.")
-    return render(request, 'onlinecourse/login.html')
-
-
-def logout_request(request):
-    logout(request)
-    messages.info(request, "You have successfully logged out.")
-    return redirect('onlinecourse:index')
-
-
-def registration_request(request):
-    if request.method == 'POST':
-        username = request.POST.get('username')
-        first_name = request.POST.get('first_name', '')
-        last_name = request.POST.get('last_name', '')
-        password = request.POST.get('password')
-        if User.objects.filter(username=username).exists():
-            messages.error(request, "Username already exists.")
-            return render(request, 'onlinecourse/registration.html')
-        user = User.objects.create_user(
-            username=username,
-            first_name=first_name,
-            last_name=last_name,
-            password=password
-        )
-        login(request, user)
-        messages.success(request, f"Account created for {username}!")
-        return redirect('onlinecourse:index')
-    return render(request, 'onlinecourse/registration.html')
+@login_required
+def show_exam_result_course(request, course_id):
+    return show_exam_result(
+        request,
+        course_id
+    )

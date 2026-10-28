@@ -24,12 +24,14 @@ class Learner(models.Model):
     DEVELOPER = 'developer'
     DATA_SCIENTIST = 'data_scientist'
     DATABASE_ADMIN = 'dba'
+
     OCCUPATION_CHOICES = [
         (STUDENT, 'Student'),
         (DEVELOPER, 'Developer'),
         (DATA_SCIENTIST, 'Data Scientist'),
-        (DATABASE_ADMIN, 'Database Admin')
+        (DATABASE_ADMIN, 'Database Admin'),
     ]
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -50,7 +52,11 @@ class Learner(models.Model):
 
 class Course(models.Model):
     name = models.CharField(max_length=200, default="Online Course")
-    image = models.ImageField(upload_to='course_images/', blank=True, null=True)
+    image = models.ImageField(
+        upload_to='course_images/',
+        blank=True,
+        null=True
+    )
     description = models.TextField(max_length=2000, blank=True)
     pub_date = models.DateField(null=True, blank=True, default=now)
     instructors = models.ManyToManyField(Instructor, blank=True)
@@ -61,7 +67,6 @@ class Course(models.Model):
         related_name='enrolled_courses'
     )
     total_enrollment = models.IntegerField(default=0)
-    is_enrolled = False
 
     def __str__(self):
         return f"Course: {self.name}"
@@ -88,11 +93,13 @@ class Enrollment(models.Model):
     AUDIT = 'audit'
     HONOR = 'honor'
     VERIFIED = 'verified'
+
     COURSE_MODES = [
         (AUDIT, 'Audit'),
         (HONOR, 'Honor'),
-        (VERIFIED, 'Verified')
+        (VERIFIED, 'Verified'),
     ]
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -104,7 +111,11 @@ class Enrollment(models.Model):
         related_name='enrollments'
     )
     date_enrolled = models.DateField(default=now)
-    mode = models.CharField(max_length=20, choices=COURSE_MODES, default=AUDIT)
+    mode = models.CharField(
+        max_length=20,
+        choices=COURSE_MODES,
+        default=AUDIT
+    )
     rating = models.FloatField(default=5.0)
 
     class Meta:
@@ -117,6 +128,7 @@ class Enrollment(models.Model):
 class Question(models.Model):
     SINGLE = 'single'
     MULTIPLE = 'multiple'
+
     QUESTION_TYPES = [
         (SINGLE, 'Single Choice'),
         (MULTIPLE, 'Multiple Choice'),
@@ -135,7 +147,11 @@ class Question(models.Model):
     )
     grade = models.IntegerField(default=1)
     order = models.IntegerField(default=0)
-    courses = models.ManyToManyField(Course, blank=True, related_name='questions')
+    courses = models.ManyToManyField(
+        Course,
+        blank=True,
+        related_name='questions'
+    )
 
     class Meta:
         ordering = ['order', 'id']
@@ -148,21 +164,31 @@ class Question(models.Model):
         return self.choices
 
     def is_get_score(self, selected_ids):
-        """
-        Check if user's selected choice id(s) match the correct answer(s).
-        """
         if not selected_ids:
             return False
-        if isinstance(selected_ids, (int, str)):
-            selected_ids = [int(selected_ids)]
-        else:
-            selected_ids = [int(i) for i in selected_ids if str(i).isdigit()]
 
-        correct_ids = list(self.choices.filter(is_correct=True).values_list('id', flat=True))
+        if isinstance(selected_ids, (int, str)):
+            try:
+                selected_ids = [int(selected_ids)]
+            except (TypeError, ValueError):
+                return False
+        else:
+            selected_ids = [
+                int(value)
+                for value in selected_ids
+                if str(value).isdigit()
+            ]
+
+        correct_ids = set(
+            self.choices.filter(is_correct=True).values_list(
+                'id', flat=True
+            )
+        )
+
         if not correct_ids:
             return False
 
-        return set(selected_ids) == set(correct_ids)
+        return set(selected_ids) == correct_ids
 
 
 class Choice(models.Model):
@@ -226,6 +252,9 @@ class Submission(models.Model):
         unique_together = ('user', 'question')
 
     def __str__(self):
-        q_id = self.question_id if self.question_id else "All"
-        c_id = self.choice_id if self.choice_id else "Multi"
-        return f"Submission by {self.user.username} for Q{q_id} Choice {c_id}"
+        question_id = self.question_id if self.question_id else "All"
+        choice_id = self.choice_id if self.choice_id else "Multi"
+        return (
+            f"Submission by {self.user.username} "
+            f"for Q{question_id} Choice {choice_id}"
+        )

@@ -1,29 +1,73 @@
 from django.urls import path
+from django.contrib.auth import views as auth_views
 from . import views
 
 app_name = 'onlinecourse'
 
 urlpatterns = [
-    # Course list and details
-    path('', views.CourseListView.as_view(), name='index'),
-    path('course/<int:pk>/', views.CourseDetailsView.as_view(), name='course_details'),
-    path('course/<int:course_id>/enroll/', views.enroll, name='enroll'),
+    path('', views.index, name='index'),
 
-    # Exam submission and result routes
-    path('course/<int:course_id>/submit/', views.submit, name='submit'),
     path(
-        'course/<int:course_id>/submission/<int:submission_id>/result/',
-        views.show_exam_result,
-        name='show_exam_result'
+        'course/<int:course_id>/',
+        views.course_details,
+        name='course_details'
     ),
+
+    path(
+        'course/<int:course_id>/enroll/',
+        views.enroll,
+        name='enroll'
+    ),
+
+    path(
+        'course/<int:course_id>/submit/',
+        views.submit,
+        name='submit'
+    ),
+
     path(
         'course/<int:course_id>/result/',
         views.show_exam_result,
         name='show_exam_result_course'
     ),
 
-    # Authentication routes
-    path('login/', views.login_request, name='login'),
-    path('logout/', views.logout_request, name='logout'),
-    path('registration/', views.registration_request, name='registration'),
+    path(
+        'course/<int:course_id>/submission/<int:submission_id>/result/',
+        views.show_exam_result,
+        name='show_exam_result'
+    ),
+
+    path(
+        'course/<int:course_id>/exam_result/',
+        views.show_exam_result_course,
+        name='exam_result_course'
+    ),
+
+    path(
+        'course/<int:course_id>/exam_result/<int:submission_id>/',
+        views.show_exam_result,
+        name='exam_result'
+    ),
+
+    path(
+        'login/',
+        auth_views.LoginView.as_view(
+            template_name='onlinecourse/login.html'
+        ),
+        name='login'
+    ),
+
+    path(
+        'logout/',
+        auth_views.LogoutView.as_view(
+            next_page='onlinecourse:index'
+        ),
+        name='logout'
+    ),
+
+    path(
+        'registration/',
+        views.registration_request,
+        name='registration'
+    ),
 ]
