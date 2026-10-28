@@ -4,10 +4,9 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
 from django.http import HttpResponseForbidden, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse
 from django.views import View
 
-from .models import Course, Lesson, Enrollment, Question, Choice, Submission
+from .models import Course, Enrollment, Question, Choice, Submission
 
 
 def index(request):
@@ -49,9 +48,30 @@ def registration_request(request):
     return render(request, 'onlinecourse/registration.html')
 
 
+def get_course_questions(course):
+    """
+    Return questions associated with a course through its lessons
+    or through the Question.courses many-to-many relationship.
+    """
+    lesson_questions = Question.objects.filter(
+        lesson__course=course
+    )
+
+    course_questions = Question.objects.filter(
+        courses=course
+    )
+
+    return (
+        lesson_questions | course_questions
+    ).distinct().order_by('order', 'id')
+
+
 def course_details(request, course_id):
     course = get_object_or_404(Course, pk=course_id)
-    lessons = course.lessons.all().prefetch_related('questions__choices')
+
+    lessons = course.lessons.all().prefetch_related(
+        'questions__choices'
+    )
 
     is_enrolled = False
 
@@ -76,26 +96,7 @@ class CourseDetailsView(View):
     template_name = 'onlinecourse/course_details_bootstrap.html'
 
     def get(self, request, course_id):
-        course = get_object_or_404(Course, pk=course_id)
-        lessons = course.lessons.all().prefetch_related('questions__choices')
-
-        is_enrolled = False
-
-        if request.user.is_authenticated:
-            is_enrolled = Enrollment.objects.filter(
-                user=request.user,
-                course=course
-            ).exists()
-
-        return render(
-            request,
-            self.template_name,
-            {
-                'course': course,
-                'lessons': lessons,
-                'is_enrolled': is_enrolled,
-            }
-        )
+        return course_details(request, course_id)
 
 
 @login_required
@@ -127,21 +128,11 @@ def submit(request, course_id):
         defaults={'mode': Enrollment.AUDIT}
     )
 
-    # Get questions associated with this course through its lessons
-    lesson_questions = Question.objects.filter(
-        lesson__course=course
+    questions = get_course_questions(course)
+
+    question_ids = set(
+        questions.values_list('id', flat=True)
     )
-
-    # Also include questions directly associated with the course
-    course_questions = Question.objects.filter(
-        courses=course
-    )
-
-    questions = (
-        lesson_questions | course_questions
-    ).distinct().order_by('order', 'id')
-
-    question_ids = set(questions.values_list('id', flat=True))
 
     valid_choices = Choice.objects.filter(
         question_id__in=question_ids
@@ -154,14 +145,14 @@ def submit(request, course_id):
 
     selected_ids = set()
 
-    # Handle radio buttons or checkboxes named choice_<question_id>
+    # Handle fields such as choice_1=5
     for key, values in request.POST.lists():
         if key.startswith('choice_'):
             for value in values:
                 if str(value).isdigit():
                     selected_ids.add(int(value))
 
-    # Handle other common form field names
+    # Handle alternative common form field names
     for key in (
         'choice',
         'choices',
@@ -172,7 +163,7 @@ def submit(request, course_id):
             if str(value).isdigit():
                 selected_ids.add(int(value))
 
-    # Handle checkbox fields whose names are choice IDs
+    # Handle checkbox fields named using choice IDs
     for key, values in request.POST.lists():
         if key.isdigit():
             if any(
@@ -181,7 +172,7 @@ def submit(request, course_id):
             ):
                 selected_ids.add(int(key))
 
-    # Ignore choices that do not belong to questions in this course
+    # Ignore invalid choice IDs and choices outside this course
     selected_choices = [
         valid_choice_map[choice_id]
         for choice_id in selected_ids
@@ -197,7 +188,9 @@ def submit(request, course_id):
 
     last_submission = None
 
-    # Save one submission per question, including unanswered questions
+    # Save one submission for each question, including unanswered ones.
+    # update_or_create prevents duplicate submissions for the same
+    # user and question when the exam is submitted again.
     for question in questions:
         question_choices = choices_by_question.get(
             question.id, []
@@ -236,19 +229,10 @@ def submit(request, course_id):
 def show_exam_result(request, course_id, submission_id=None):
     course = get_object_or_404(Course, pk=course_id)
 
-    lesson_questions = Question.objects.filter(
-        lesson__course=course
-    )
+    questions = get_course_questions(course)
 
-    course_questions = Question.objects.filter(
-        courses=course
-    )
-
-    questions = (
-        lesson_questions | course_questions
-    ).distinct().order_by('order', 'id')
-
-    # Ensure the requested submission belongs to the current user
+    # Verify ownership and course association when a submission ID
+    # is supplied in the URL.
     if submission_id is not None:
         target_submission = get_object_or_404(
             Submission,
@@ -263,7 +247,6 @@ def show_exam_result(request, course_id, submission_id=None):
                 'You are not allowed to view this result.'
             )
 
-        # Prevent a submission from being used with the wrong course
         if target_submission.enrollment_id:
             if target_submission.enrollment.course_id != course.id:
                 return HttpResponseForbidden(
@@ -271,14 +254,16 @@ def show_exam_result(request, course_id, submission_id=None):
                 )
 
         elif target_submission.question_id:
-            question_belongs_to_course = (
-                target_submission.question.lesson.course_id == course.id
-                or target_submission.question.courses.filter(
+            target_question = target_submission.question
+
+            belongs_to_course = (
+                target_question.lesson.course_id == course.id
+                or target_question.courses.filter(
                     pk=course.id
                 ).exists()
             )
 
-            if not question_belongs_to_course:
+            if not belongs_to_course:
                 return HttpResponseForbidden(
                     'This result does not belong to this course.'
                 )
@@ -313,7 +298,7 @@ def show_exam_result(request, course_id, submission_id=None):
                 submission.choices.all()
             )
 
-            # Support submissions stored using only the single-choice FK
+            # Support submissions stored in the single-choice field.
             if not selected_choices and submission.choice_id:
                 selected_choices = [submission.choice]
 
@@ -321,7 +306,9 @@ def show_exam_result(request, course_id, submission_id=None):
             choice.id for choice in selected_choices
         ]
 
+        # Use the model's scoring method to check the answer.
         is_correct = question.is_get_score(selected_ids)
+
         marks = question.grade or 0
         score = marks if is_correct else 0
 
@@ -333,7 +320,6 @@ def show_exam_result(request, course_id, submission_id=None):
 
         results.append({
             'question': question,
-            'answered': bool(selected_choices),
             'selected_choice': (
                 selected_choices[0]
                 if selected_choices
@@ -342,9 +328,24 @@ def show_exam_result(request, course_id, submission_id=None):
             'selected_choices': selected_choices,
             'choices': question.choices.all(),
             'is_correct': is_correct,
+            'answered': bool(selected_choices),
             'grade': marks,
             'score': score,
         })
+
+    total_questions = len(results)
+
+    incorrect_count = sum(
+        1
+        for item in results
+        if item['answered'] and not item['is_correct']
+    )
+
+    unanswered_count = sum(
+        1
+        for item in results
+        if not item['answered']
+    )
 
     percentage = (
         (total_score / total_marks) * 100
@@ -352,33 +353,41 @@ def show_exam_result(request, course_id, submission_id=None):
         else 0
     )
 
-    passed = percentage >= 70
-    unanswered_count = sum(
-        not result['selected_choices']
-        for result in results
-    )
-    incorrect_count = len(results) - correct_count - unanswered_count
+    percentage = round(percentage, 2)
+    passing_threshold = 70
+    passed = percentage >= passing_threshold
+
+    if passed:
+        message = 'You have successfully passed the examination!'
+    else:
+        message = (
+            'Exam Attempt Failed. You did not reach the passing score. '
+            'Please review your answers and try again.'
+        )
 
     context = {
         'course': course,
         'results': results,
-        'total_questions': len(results),
-        'unanswered_count': unanswered_count,
-        'incorrect_count': incorrect_count,
-        'earned_score': total_score,
+
+        # Score information
         'total_score': total_marks,
         'total_marks': total_marks,
+        'earned_score': total_score,
         'score': total_score,
         'percentage': percentage,
+
+        # Question statistics
+        'total_questions': total_questions,
+        'correct_count': correct_count,
+        'incorrect_count': incorrect_count,
+        'unanswered_count': unanswered_count,
+
+        # Pass/fail information
         'passed': passed,
         'is_passed': passed,
-        'correct_count': correct_count,
-        'passing_threshold': 70,
-        'message': (
-            'You passed the exam.'
-            if passed
-            else 'Exam Attempt Failed. Please review the questions and try again.'
-        ),
+        'passing_threshold': passing_threshold,
+        'message': message,
+
         'submission_id': submission_id,
     }
 
